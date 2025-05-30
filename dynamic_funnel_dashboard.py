@@ -16,38 +16,59 @@ st.title("Funnel Fusion Dashboard (Dynamic Upload Version)")
 
 st.markdown("Upload your classification and inlink files to begin analysis.")
 
-# --------------------------
-# FILE UPLOAD
-# --------------------------
+@st.cache_data(show_spinner=False)
+def load_pages(pages_file):
+    df = pd.read_csv(pages_file)
+    df["URL"] = df["Address"].str.rstrip("/").str.lower()
+    df["Topic"] = df["Topic"].fillna("No Topic")
+    return df
+
+@st.cache_data(show_spinner=False)
+def load_anchors(anchors_file):
+    df = pd.read_excel(anchors_file)
+    df = df.rename(columns={"Source": "From", "Destination": "To", "Anchor": "Anchor Text"})
+    df["From"] = df["From"].str.rstrip("/").str.lower()
+    df["To"] = df["To"].str.rstrip("/").str.lower()
+    return df
+
+@st.cache_data(show_spinner=False)
+def merge_data(pages_df, anchors_df):
+    merged_df = anchors_df.merge(pages_df[["URL", "Funnel", "Topic"]], left_on='From', right_on='URL', how='left')
+    merged_df = merged_df.rename(columns={"Funnel": "From_Funnel", "Topic": "From_Topic"}).drop(columns=["URL"])
+    merged_df = merged_df.merge(pages_df[["URL", "Funnel", "Topic"]], left_on='To', right_on='URL', how='left')
+    merged_df = merged_df.rename(columns={"Funnel": "To_Funnel", "Topic": "To_Topic"}).drop(columns=["URL"])
+    return merged_df
+
+@st.cache_data(show_spinner=False)
+def compute_graph_layout(G):
+    return nx.kamada_kawai_layout(G, weight=None)
+
+@st.cache_data(show_spinner=False)
+def compute_sankey_data(global_merged):
+    sankey_data = global_merged.groupby(["From_Funnel", "To_Funnel"]).size().reset_index(name="Count")
+    return sankey_data
+
+@st.cache_data(show_spinner=False)
+def compute_topic_heatmap(global_merged):
+    topic_counts = global_merged.groupby(["From_Topic", "To_Topic"]).size().reset_index(name="Count")
+    heatmap = topic_counts.pivot("From_Topic", "To_Topic", "Count").fillna(0)
+    return heatmap
+
+@st.cache_data(show_spinner=False)
+def compute_wordcloud(text):
+    wc = WordCloud(width=800, height=400, background_color="white").generate(text)
+    return wc
+
 pages_file = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
 anchors_file = st.sidebar.file_uploader("Upload Inlinks Excel", type="xlsx")
 
 if pages_file and anchors_file:
-    # Load classification data
-    pages_df = pd.read_csv(pages_file)
-    pages_df["URL"] = pages_df["Address"].str.rstrip("/").str.lower()
-    pages_df["Topic"] = pages_df["Topic"].fillna("No Topic")
+    pages_df = load_pages(pages_file)
+    anchors_df = load_anchors(anchors_file)
 
-    # Load anchors data from Excel and normalize
-    anchors_df = pd.read_excel(anchors_file)
-    anchors_df = anchors_df.rename(columns={
-        "Source": "From",
-        "Destination": "To",
-        "Anchor": "Anchor Text"
-    })
-    anchors_df["From"] = anchors_df["From"].str.rstrip("/").str.lower()
-    anchors_df["To"] = anchors_df["To"].str.rstrip("/").str.lower()
-
-    # --------------------------
-    # GLOBAL FILTERS
-    # --------------------------
-    st.sidebar.header("Global Filters")
-
-    # Funnel filter
     unique_funnels = sorted(pages_df["Funnel"].dropna().unique())
     selected_funnels = st.sidebar.multiselect("Select Funnel Stage(s):", options=unique_funnels, default=unique_funnels)
 
-    # Topic filter
     topic_set = set()
     for topics in pages_df["Topic"].dropna():
         for t in str(topics).split(","):
@@ -56,15 +77,12 @@ if pages_file and anchors_file:
     unique_topics = sorted(topic_set)
     selected_topics = st.sidebar.multiselect("Select Topic(s):", options=unique_topics, default=unique_topics)
 
-    # Geo filter
     unique_geos = sorted(pages_df["Geo"].dropna().unique())
     selected_geos = st.sidebar.multiselect("Select Geo(s):", options=unique_geos, default=unique_geos)
 
-    # Link Position filter
     link_positions = anchors_df["Link Position"].dropna().unique().tolist()
     selected_link_pos = st.sidebar.multiselect("Select Link Position(s):", options=link_positions, default=["Content"])
 
-    # Apply filters to data
     filtered_pages = pages_df.copy()
     if selected_funnels:
         filtered_pages = filtered_pages[filtered_pages["Funnel"].isin(selected_funnels)]
@@ -75,11 +93,7 @@ if pages_file and anchors_file:
 
     anchors_df = anchors_df[anchors_df["Link Position"].isin(selected_link_pos)]
 
-    # Merge data
-    merged_df = anchors_df.merge(pages_df[["URL", "Funnel", "Topic"]], left_on='From', right_on='URL', how='left')
-    merged_df = merged_df.rename(columns={"Funnel": "From_Funnel", "Topic": "From_Topic"}).drop(columns=["URL"])
-    merged_df = merged_df.merge(pages_df[["URL", "Funnel", "Topic"]], left_on='To', right_on='URL', how='left')
-    merged_df = merged_df.rename(columns={"Funnel": "To_Funnel", "Topic": "To_Topic"}).drop(columns=["URL"])
+    merged_df = merge_data(pages_df, anchors_df)
 
     filtered_urls = set(filtered_pages["URL"])
     global_merged = merged_df[(merged_df["From"].isin(filtered_urls)) & (merged_df["To"].isin(filtered_urls))]
@@ -93,11 +107,17 @@ if pages_file and anchors_file:
         gap_df["InboundLinks"] = gap_df["InboundLinks"].fillna(0).astype(int)
         threshold = st.slider("Max inbound links", 0, int(gap_df["InboundLinks"].max()), 2)
         st.dataframe(gap_df[gap_df["InboundLinks"] <= threshold][["URL", "Funnel", "Topic", "Geo", "InboundLinks"]])
+        if not gap_df.empty:
+            selected_url = st.selectbox("Select a URL to view inbound link details:", options=gap_df["URL"].tolist())
+            if selected_url:
+                details = anchors_df[anchors_df["To"] == selected_url]
+                st.subheader(f"Inbound Link Details for {selected_url}")
+                st.dataframe(details)
 
     with tabs[1]:
         st.header("Internal Link Graph")
         G = nx.from_pandas_edgelist(global_merged, source='From', target='To', edge_attr='Anchor Text', create_using=nx.DiGraph())
-        pos = nx.spring_layout(G)
+        pos = compute_graph_layout(G)
         fig = go.Figure()
         for src, dst in G.edges():
             x0, y0 = pos[src]
@@ -107,10 +127,15 @@ if pages_file and anchors_file:
             x, y = pos[node]
             fig.add_trace(go.Scatter(x=[x], y=[y], mode='markers+text', text=[node], textposition="bottom center", marker=dict(size=8)))
         st.plotly_chart(fig)
+        selected_url = st.selectbox("Select a URL to view its outbound links:", options=list(G.nodes))
+        if selected_url:
+            outbound = global_merged[global_merged["From"] == selected_url][["From", "To", "Anchor Text", "To_Funnel", "To_Topic"]]
+            st.subheader(f"Outbound Links from {selected_url}")
+            st.dataframe(outbound)
 
     with tabs[2]:
         st.header("Funnel Flow Sankey")
-        sankey_data = global_merged.groupby(["From_Funnel", "To_Funnel"]).size().reset_index(name="Count")
+        sankey_data = compute_sankey_data(global_merged)
         funnel_stages = ["Top", "Mid", "Bottom"]
         f_map = {k: i for i, k in enumerate(funnel_stages)}
         sankey_data = sankey_data[sankey_data["From_Funnel"].isin(f_map) & sankey_data["To_Funnel"].isin(f_map)]
@@ -125,8 +150,7 @@ if pages_file and anchors_file:
 
     with tabs[3]:
         st.header("Topic Transition Heatmap")
-        topic_counts = global_merged.groupby(["From_Topic", "To_Topic"]).size().reset_index(name="Count")
-        heatmap = topic_counts.pivot("From_Topic", "To_Topic", "Count").fillna(0)
+        heatmap = compute_topic_heatmap(global_merged)
         fig = px.imshow(heatmap, text_auto=True, labels=dict(x="To", y="From", color="Links"))
         st.plotly_chart(fig)
 
@@ -135,7 +159,7 @@ if pages_file and anchors_file:
         col1, col2 = st.columns(2)
         with col1:
             text = " ".join(anchors_df["Anchor Text"].dropna().astype(str))
-            wc = WordCloud(width=800, height=400, background_color="white").generate(text)
+            wc = compute_wordcloud(text)
             fig_wc, ax = plt.subplots(figsize=(8, 4))
             ax.imshow(wc, interpolation="bilinear")
             ax.axis("off")
