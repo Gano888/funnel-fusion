@@ -7,4 +7,3 @@ wordcloud
 matplotlib
 nltk
 openpyxl
-io
