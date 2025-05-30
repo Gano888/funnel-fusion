@@ -1,0 +1,8 @@
+streamlit
+pandas
+networkx
+plotly
+matplotlib
+wordcloud
+nltk
+openpyxl
