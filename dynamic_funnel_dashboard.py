@@ -37,7 +37,8 @@ def load_duckdb(pages_file, anchors_file):
 # Helper
 # ----------------------------
 def to_sql_str_list(py_list):
-    return "(" + ", ".join(f"'{s.replace(\"'\", \"''\")}'" for s in py_list) + ")"
+    return "(" + ", ".join("'" + s.replace("'", "''") + "'" for s in py_list) + ")"
+
 
 # ----------------------------
 # User Upload
