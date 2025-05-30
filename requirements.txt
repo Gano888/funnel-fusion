@@ -1,6 +1,7 @@
 streamlit
 pandas
 networkx
+scipy
 plotly
 matplotlib
 wordcloud
