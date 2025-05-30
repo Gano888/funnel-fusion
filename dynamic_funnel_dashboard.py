@@ -19,15 +19,23 @@ st.title("Funnel Fusion Dashboard (DuckDB Optimized)")
 # ----------------------------
 @st.cache_resource(show_spinner=False)
 def load_duckdb(pages_file, anchors_file):
+    import duckdb
+    import io
+
     con = duckdb.connect(database=":memory:")
-    
+
     # Load pages CSV
-    pages_content = pages_file.read().decode("utf-8")
-    con.execute("CREATE TABLE pages AS SELECT * FROM read_csv_auto(?)", [io.StringIO(pages_content)])
-    
-    # Load anchors Excel
-    con.execute("CREATE TABLE anchors AS SELECT * FROM read_excel(?)", [anchors_file])
+    pages_buffer = io.StringIO(pages_file.read().decode("utf-8"))
+    con.register("pages_view", pd.read_csv(pages_buffer))
+    con.execute("CREATE TABLE pages AS SELECT * FROM pages_view")
+
+    # Load anchors XLSX
+    anchors_buffer = io.BytesIO(anchors_file.read())
+    con.register("anchors_view", pd.read_excel(anchors_buffer, engine="openpyxl"))
+    con.execute("CREATE TABLE anchors AS SELECT * FROM anchors_view")
+
     return con
+
 
 # ----------------------------
 # User Upload
