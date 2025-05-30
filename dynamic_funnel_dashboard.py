@@ -75,12 +75,12 @@ if pages_file and anchors_file:
     pages_query = f"""
         SELECT *, LOWER(RTRIM(Address, '/')) AS URL
         FROM pages
-        WHERE Funnel IN {tuple(selected_funnels)}
-        AND Geo IN {tuple(selected_geos)}
+        WHERE Funnel IN {funnels_sql}
+        AND Geo IN {geos_sql}
         AND EXISTS (
             SELECT 1
             FROM UNNEST(STRING_SPLIT(Topic, ',')) AS topic
-            WHERE topic IN {tuple(selected_topics)}
+            WHERE topic IN {topics_sql}
         )
     """
 
