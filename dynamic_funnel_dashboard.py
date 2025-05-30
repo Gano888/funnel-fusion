@@ -19,9 +19,6 @@ st.title("Funnel Fusion Dashboard (DuckDB Optimized)")
 # ----------------------------
 @st.cache_resource(show_spinner=False)
 def load_duckdb(pages_file, anchors_file):
-    import duckdb
-    import io
-
     con = duckdb.connect(database=":memory:")
 
     # Load pages CSV
@@ -36,68 +33,74 @@ def load_duckdb(pages_file, anchors_file):
 
     return con
 
+# ----------------------------
+# Helper
+# ----------------------------
+def to_sql_str_list(py_list):
+    return "(" + ", ".join(f"'{s.replace(\"'\", \"''\")}'" for s in py_list) + ")"
 
 # ----------------------------
 # User Upload
 # ----------------------------
 pages_file = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
 anchors_file = st.sidebar.file_uploader("Upload Inlinks Excel", type="xlsx")
-def to_sql_str_list(py_list):
-    return "(" + ", ".join(f"'{s.replace("'", "''")}'" for s in py_list) + ")"
 
 if pages_file and anchors_file:
     con = load_duckdb(pages_file, anchors_file)
 
-    # Load lists for filters
-    funnel_list = con.execute("SELECT DISTINCT Funnel FROM pages WHERE Funnel IS NOT NULL").fetchall()
-    funnel_list = sorted([f[0] for f in funnel_list])
+    # Filters
+    funnel_list = sorted([f[0] for f in con.execute("SELECT DISTINCT Funnel FROM pages WHERE Funnel IS NOT NULL").fetchall()])
     selected_funnels = st.sidebar.multiselect("Funnel Stage(s)", funnel_list, default=funnel_list)
 
     topic_list = con.execute("SELECT DISTINCT UNNEST(STRING_SPLIT(Topic, ',')) FROM pages").fetchall()
     topic_list = sorted(set(t.strip() for t in [t[0] for t in topic_list if t[0]]))
     selected_topics = st.sidebar.multiselect("Topic(s)", topic_list, default=topic_list)
 
-    geo_list = con.execute("SELECT DISTINCT Geo FROM pages WHERE Geo IS NOT NULL").fetchall()
-    geo_list = sorted([g[0] for g in geo_list])
+    geo_list = sorted([g[0] for g in con.execute("SELECT DISTINCT Geo FROM pages WHERE Geo IS NOT NULL").fetchall()])
     selected_geos = st.sidebar.multiselect("Geo(s)", geo_list, default=geo_list)
 
-    position_list = con.execute("SELECT DISTINCT \"Link Position\" FROM anchors WHERE \"Link Position\" IS NOT NULL").fetchall()
-    position_list = sorted([p[0] for p in position_list])
+    position_list = sorted([p[0] for p in con.execute("SELECT DISTINCT \"Link Position\" FROM anchors WHERE \"Link Position\" IS NOT NULL").fetchall()])
     selected_positions = st.sidebar.multiselect("Link Position(s)", position_list, default=["Content"])
 
-    topics_sql = to_sql_str_list(selected_topics)
+    # SQL-formatted lists
     funnels_sql = to_sql_str_list(selected_funnels)
     geos_sql = to_sql_str_list(selected_geos)
+    topics_sql = to_sql_str_list(selected_topics)
+    positions_sql = to_sql_str_list(selected_positions)
 
-    # ----------------------------
-    # Filtered Pages and Anchors
-    # ----------------------------
+    # Queries
     pages_query = f"""
         SELECT *, LOWER(RTRIM(Address, '/')) AS URL
         FROM pages
         WHERE Funnel IN {funnels_sql}
-        AND Geo IN {geos_sql}
-        AND EXISTS (
-            SELECT 1
-            FROM UNNEST(STRING_SPLIT(Topic, ',')) AS topic
-            WHERE topic IN {topics_sql}
-        )
+          AND Geo IN {geos_sql}
+          AND EXISTS (
+              SELECT 1
+              FROM UNNEST(STRING_SPLIT(Topic, ',')) AS topic
+              WHERE topic IN {topics_sql}
+          )
     """
 
     anchors_query = f"""
         SELECT *, LOWER(RTRIM(From, '/')) AS FromURL, LOWER(RTRIM(To, '/')) AS ToURL
         FROM anchors
-        WHERE \"Link Position\" IN {tuple(selected_positions)}
+        WHERE "Link Position" IN {positions_sql}
     """
 
+    # Load filtered data
     filtered_pages = con.execute(pages_query).fetchdf()
     filtered_anchors = con.execute(anchors_query).fetchdf()
 
-    # Merge pages into anchors
-    merged = filtered_anchors.merge(filtered_pages[["URL", "Funnel", "Topic"]], left_on="FromURL", right_on="URL", how="left")\
-                             .rename(columns={"Funnel": "From_Funnel", "Topic": "From_Topic"}).drop(columns=["URL"])
-    merged = merged.merge(filtered_pages[["URL", "Funnel", "Topic"]], left_on="ToURL", right_on="URL", how="left")\
-                   .rename(columns={"Funnel": "To_Funnel", "Topic": "To_Topic"}).drop(columns=["URL"])
+    # Merge
+    merged = filtered_anchors.merge(
+        filtered_pages[["URL", "Funnel", "Topic"]],
+        left_on="FromURL", right_on="URL", how="left"
+    ).rename(columns={"Funnel": "From_Funnel", "Topic": "From_Topic"}).drop(columns=["URL"])
+
+    merged = merged.merge(
+        filtered_pages[["URL", "Funnel", "Topic"]],
+        left_on="ToURL", right_on="URL", how="left"
+    ).rename(columns={"Funnel": "To_Funnel", "Topic": "To_Topic"}).drop(columns=["URL"])
 
     tabs = st.tabs(["Gap Analysis", "Internal Graph", "Sankey", "Topic Heatmap", "Anchors", "Anchor Usage"])
 
