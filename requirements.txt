@@ -1,9 +1,9 @@
 streamlit
 pandas
+duckdb
 networkx
-scipy
 plotly
-matplotlib
 wordcloud
+matplotlib
 nltk
 openpyxl
