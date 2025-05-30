@@ -1,9 +1,10 @@
 import streamlit as st
-import duckdb
 import pandas as pd
+import duckdb
 import networkx as nx
 import plotly.graph_objects as go
 import plotly.express as px
+import io
 from collections import Counter
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
@@ -12,25 +13,26 @@ import nltk
 nltk.download('punkt', quiet=True)
 
 st.set_page_config(layout="wide")
+st.title("Funnel Fusion Dashboard (Optimized with DuckDB)")
 
-st.title("Funnel Fusion Dashboard (DuckDB Optimized)")
-st.markdown("Upload your classification and inlink files to begin analysis.")
-
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def load_duckdb(pages_file, anchors_file):
     con = duckdb.connect(database=':memory:')
-    con.execute(f"""
-        CREATE TABLE pages AS 
-        SELECT *, LOWER(RTRIM(Address, '/')) AS URL
-        FROM read_csv_auto('{pages_file.name}', HEADER=TRUE);
-    """)
-    con.execute(f"""
-        CREATE TABLE anchors AS 
+    
+    # Read CSV to string then to DuckDB
+    pages_csv = pages_file.read().decode("utf-8")
+    con.execute("CREATE TABLE pages_raw AS SELECT * FROM read_csv_auto(?)", [io.StringIO(pages_csv)])
+    con.execute("CREATE TABLE pages AS SELECT *, LOWER(RTRIM(Address, '/')) AS URL FROM pages_raw")
+    
+    # Read XLSX directly
+    con.execute("CREATE TABLE anchors_raw AS SELECT * FROM read_excel(?)", [anchors_file])
+    con.execute("""
+        CREATE TABLE anchors AS
         SELECT *, LOWER(RTRIM(Source, '/')) AS From, LOWER(RTRIM(Destination, '/')) AS To
-        FROM read_excel('{anchors_file.name}', sheet=0);
+        FROM anchors_raw
     """)
     return con
-
+    
 pages_file = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
 anchors_file = st.sidebar.file_uploader("Upload Inlinks Excel", type="xlsx")
 
