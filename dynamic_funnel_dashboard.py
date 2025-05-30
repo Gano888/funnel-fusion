@@ -42,6 +42,8 @@ def load_duckdb(pages_file, anchors_file):
 # ----------------------------
 pages_file = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
 anchors_file = st.sidebar.file_uploader("Upload Inlinks Excel", type="xlsx")
+def to_sql_str_list(py_list):
+    return "(" + ", ".join(f"'{s.replace("'", "''")}'" for s in py_list) + ")"
 
 if pages_file and anchors_file:
     con = load_duckdb(pages_file, anchors_file)
@@ -62,6 +64,10 @@ if pages_file and anchors_file:
     position_list = con.execute("SELECT DISTINCT \"Link Position\" FROM anchors WHERE \"Link Position\" IS NOT NULL").fetchall()
     position_list = sorted([p[0] for p in position_list])
     selected_positions = st.sidebar.multiselect("Link Position(s)", position_list, default=["Content"])
+
+    topics_sql = to_sql_str_list(selected_topics)
+    funnels_sql = to_sql_str_list(selected_funnels)
+    geos_sql = to_sql_str_list(selected_geos)
 
     # ----------------------------
     # Filtered Pages and Anchors
