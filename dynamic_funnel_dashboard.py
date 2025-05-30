@@ -71,8 +71,13 @@ if pages_file and anchors_file:
         FROM pages
         WHERE Funnel IN {tuple(selected_funnels)}
         AND Geo IN {tuple(selected_geos)}
-        AND ARRAY_INTERSECT(STRING_SPLIT(Topic, ','), {selected_topics}) IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM UNNEST(STRING_SPLIT(Topic, ',')) AS topic
+            WHERE topic IN {tuple(selected_topics)}
+        )
     """
+
     anchors_query = f"""
         SELECT *, LOWER(RTRIM(From, '/')) AS FromURL, LOWER(RTRIM(To, '/')) AS ToURL
         FROM anchors
