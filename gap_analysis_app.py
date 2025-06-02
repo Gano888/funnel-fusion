@@ -23,7 +23,8 @@ def load_duckdb(pages_file, anchors_file):
 
 # ------------- Helpers -------------
 def quote_list(items):
-    return "(" + ", ".join(f"'{str(i).replace(\"'\", \"''\")}'" for i in items) + ")"
+    return "(" + ", ".join("'" + str(i).replace("'", "''") + "'" for i in items) + ")"
+
 
 # ------------- Upload Files -------------
 pages_file = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
