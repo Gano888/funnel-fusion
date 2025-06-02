@@ -33,7 +33,8 @@ def quote_sql_str(s):
     return "'" + s.replace("'", "''") + "'"
 
 def to_in_clause(py_list):
-    return "(" + ", ".join(quote_sql_str(s) for s in py_list) + ")"
+    return "(" + ", ".join(quote_sql_str(s) for s in py_list) + ")" if py_list else "('')"  # never empty
+
 
 
 if pages_file and anchors_file:
@@ -59,14 +60,18 @@ if pages_file and anchors_file:
         WHERE Funnel IN {to_sql_str_list(selected_funnels)}
         AND Geo IN {to_sql_str_list(selected_geos)}
     """
-    anchors_in_clause = to_in_clause(selected_positions)
+    if selected_positions:
+        anchors_in_clause = to_in_clause(selected_positions)
+        anchors_sql = f"""
+            SELECT *, LOWER(RTRIM("From", '/')) AS FromURL, LOWER(RTRIM("To", '/')) AS ToURL
+            FROM anchors
+            WHERE "Link Position" IN {anchors_in_clause}
+        """
+        anchors_df = con.execute(anchors_sql).fetchdf()
+    else:
+        st.warning("No link positions selected. Please select at least one.")
+        st.stop()
 
-    anchors_sql = f"""
-        SELECT *, LOWER(RTRIM("From", '/')) AS FromURL, LOWER(RTRIM("To", '/')) AS ToURL
-        FROM anchors
-        WHERE "Link Position" IN {anchors_in_clause}
-    """
-    anchors_df = con.execute(anchors_sql).fetchdf()
 
 
     # ------------- Inbound Link Count & Gap Analysis -------------
