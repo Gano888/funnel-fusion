@@ -52,14 +52,12 @@ if pages_file and anchors_file:
         WHERE Funnel IN {to_sql_str_list(selected_funnels)}
         AND Geo IN {to_sql_str_list(selected_geos)}
     """
-    anchors_sql = f"""
-        SELECT *, LOWER(RTRIM(From, '/')) AS FromURL, LOWER(RTRIM(To, '/')) AS ToURL
+    anchors_df = con.execute("""
+        SELECT *, LOWER(RTRIM("From", '/')) AS FromURL, LOWER(RTRIM("To", '/')) AS ToURL
         FROM anchors
-        WHERE \"Link Position\" IN {to_sql_str_list(selected_positions)}
-    """
+        WHERE "Link Position" IN ?
+    """, [selected_positions]).fetchdf()
 
-    pages_df = con.execute(pages_sql).fetchdf()
-    anchors_df = con.execute(anchors_sql).fetchdf()
 
     # ------------- Inbound Link Count & Gap Analysis -------------
     inbounds = anchors_df.groupby("ToURL")["Anchor Text"].count().reset_index(name="InboundLinks")
