@@ -4,7 +4,7 @@ import duckdb
 import io
 
 st.set_page_config(layout="wide")
-st.title("Internal Link Gap Finder (Optimized)")
+st.title("Internal Link Analysis")
 
 # ---------------- Load Files into DuckDB ----------------
 @st.cache_resource(show_spinner=False)
@@ -74,7 +74,7 @@ if pages_file and anchors_file:
     gap_df["InboundLinks"] = gap_df["InboundLinks"].fillna(0).astype(int)
 
     max_links = int(gap_df["InboundLinks"].max()) if not gap_df.empty else 0
-    threshold = st.slider("Maximum Inbound Links", 0, max_links, min(2, max_links))
+    threshold = st.slider("Maximum Inbound Links", 0, max_links, max_links)
 
     filtered = gap_df[gap_df["InboundLinks"] <= threshold][["URL", "Funnel", "Topic", "Geo", "InboundLinks"]]
     st.dataframe(filtered)
