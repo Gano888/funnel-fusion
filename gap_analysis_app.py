@@ -57,6 +57,11 @@ if pages_file and anchors_file:
         WHERE Funnel IN {funnels_str}
         AND Geo IN {geos_str}
     """
+    st.text("Executing anchors_sql:")
+    st.code(anchors_sql, language="sql")
+    test = con.execute("SELECT * FROM anchors LIMIT 5").fetchdf()
+    st.write(test)
+
 
     anchors_sql = f"""
         SELECT *, LOWER(RTRIM("From", '/')) AS FromURL, LOWER(RTRIM("To", '/')) AS ToURL
