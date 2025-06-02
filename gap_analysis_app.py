@@ -4,7 +4,7 @@ import duckdb
 import io
 
 st.set_page_config(layout="wide")
-st.title("Internal Link Gap Finder (Safe Minimal Version)")
+st.title("Internal Link Gap Finder (Minimal Version)")
 
 # ------------- Load Files -------------
 @st.cache_resource(show_spinner=False)
@@ -21,6 +21,10 @@ def load_duckdb(pages_file, anchors_file):
 
     return con
 
+# ------------- Helpers -------------
+def quote_list(items):
+    return "(" + ", ".join(f"'{str(i).replace(\"'\", \"''\")}'" for i in items) + ")"
+
 # ------------- Upload Files -------------
 pages_file = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
 anchors_file = st.sidebar.file_uploader("Upload Inlinks Excel", type="xlsx")
@@ -29,31 +33,38 @@ if pages_file and anchors_file:
     con = load_duckdb(pages_file, anchors_file)
 
     # ------------- Sidebar Filters -------------
-    funnel_list = [f[0] for f in con.execute("SELECT DISTINCT Funnel FROM pages WHERE Funnel IS NOT NULL").fetchall()]
+    funnel_list = con.execute("SELECT DISTINCT Funnel FROM pages WHERE Funnel IS NOT NULL").fetchall()
+    funnel_list = sorted([f[0] for f in funnel_list])
     selected_funnels = st.sidebar.multiselect("Funnel Stage(s)", funnel_list, default=funnel_list)
 
-    geo_list = [g[0] for g in con.execute("SELECT DISTINCT Geo FROM pages WHERE Geo IS NOT NULL").fetchall()]
+    geo_list = con.execute("SELECT DISTINCT Geo FROM pages WHERE Geo IS NOT NULL").fetchall()
+    geo_list = sorted([g[0] for g in geo_list])
     selected_geos = st.sidebar.multiselect("Geo(s)", geo_list, default=geo_list)
 
-    position_list = [p[0] for p in con.execute('SELECT DISTINCT "Link Position" FROM anchors WHERE "Link Position" IS NOT NULL').fetchall()]
+    position_list = con.execute("SELECT DISTINCT \"Link Position\" FROM anchors WHERE \"Link Position\" IS NOT NULL").fetchall()
+    position_list = sorted([p[0] for p in position_list])
     selected_positions = st.sidebar.multiselect("Link Position(s)", position_list, default=["Content"])
 
-    if not selected_funnels or not selected_geos or not selected_positions:
-        st.warning("Please select at least one value in all filters.")
-        st.stop()
+    # ------------- Build SQL Queries (Safe Formatting) -------------
+    funnels_str = quote_list(selected_funnels)
+    geos_str = quote_list(selected_geos)
+    positions_str = quote_list(selected_positions)
 
-    # ------------- Filtered Queries Using Parameters -------------
-    pages_df = con.execute("""
+    pages_sql = f"""
         SELECT *, LOWER(RTRIM(Address, '/')) AS URL
         FROM pages
-        WHERE Funnel IN ? AND Geo IN ?
-    """, [selected_funnels, selected_geos]).fetchdf()
+        WHERE Funnel IN {funnels_str}
+        AND Geo IN {geos_str}
+    """
 
-    anchors_df = con.execute("""
+    anchors_sql = f"""
         SELECT *, LOWER(RTRIM("From", '/')) AS FromURL, LOWER(RTRIM("To", '/')) AS ToURL
         FROM anchors
-        WHERE "Link Position" IN ?
-    """, [selected_positions]).fetchdf()
+        WHERE "Link Position" IN {positions_str}
+    """
+
+    pages_df = con.execute(pages_sql).fetchdf()
+    anchors_df = con.execute(anchors_sql).fetchdf()
 
     # ------------- Inbound Link Count & Gap Analysis -------------
     inbounds = anchors_df.groupby("ToURL")["Anchor Text"].count().reset_index(name="InboundLinks")
