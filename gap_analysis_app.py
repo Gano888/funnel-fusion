@@ -29,6 +29,13 @@ def to_sql_str_list(py_list):
 pages_file = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
 anchors_file = st.sidebar.file_uploader("Upload Inlinks Excel", type="xlsx")
 
+def quote_sql_str(s):
+    return "'" + s.replace("'", "''") + "'"
+
+def to_in_clause(py_list):
+    return "(" + ", ".join(quote_sql_str(s) for s in py_list) + ")"
+
+
 if pages_file and anchors_file:
     con = load_duckdb(pages_file, anchors_file)
 
@@ -52,11 +59,14 @@ if pages_file and anchors_file:
         WHERE Funnel IN {to_sql_str_list(selected_funnels)}
         AND Geo IN {to_sql_str_list(selected_geos)}
     """
-    anchors_df = con.execute("""
+    anchors_in_clause = to_in_clause(selected_positions)
+
+    anchors_sql = f"""
         SELECT *, LOWER(RTRIM("From", '/')) AS FromURL, LOWER(RTRIM("To", '/')) AS ToURL
         FROM anchors
-        WHERE "Link Position" IN ?
-    """, [selected_positions]).fetchdf()
+        WHERE "Link Position" IN {anchors_in_clause}
+    """
+    anchors_df = con.execute(anchors_sql).fetchdf()
 
 
     # ------------- Inbound Link Count & Gap Analysis -------------
