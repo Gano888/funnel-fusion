@@ -22,26 +22,19 @@ def load_duckdb(pages_file, anchors_file):
     return con
 
 def to_sql_str_list(items):
-    """
-    Safely convert a Python list of scalars (strings or numbers)
-    into a parenthesized, single-quoted SQL list. E.g. ["US","CA"] -> "('US','CA')".
-    Caller must ensure items is non-empty; otherwise, the app logic should skip
-    the SQL filter entirely.
-    """
     escaped = ["'" + str(i).replace("'", "''") + "'" for i in items]
     return "(" + ", ".join(escaped) + ")"
 
 # ---------------- Upload Interface ----------------
-pages_file    = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
-anchors_file  = st.sidebar.file_uploader("Upload Inlinks CSV", type="csv")
+pages_file   = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
+anchors_file = st.sidebar.file_uploader("Upload Inlinks CSV", type="csv")
 
 if pages_file and anchors_file:
     con = load_duckdb(pages_file, anchors_file)
 
-    # Build Filter Options (always available even if selections end up empty)
+    # Build filter picklists
     funnel_list = [
-        row[0]
-        for row in con.execute(
+        row[0] for row in con.execute(
             "SELECT DISTINCT Funnel FROM pages WHERE Funnel IS NOT NULL"
         ).fetchall()
     ]
@@ -51,15 +44,15 @@ if pages_file and anchors_file:
     )
 
     geo_list = [
-        row[0]
-        for row in con.execute("SELECT DISTINCT Geo FROM pages WHERE Geo IS NOT NULL").fetchall()
+        row[0] for row in con.execute(
+            "SELECT DISTINCT Geo FROM pages WHERE Geo IS NOT NULL"
+        ).fetchall()
     ]
     geo_list = sorted(geo_list)
     selected_geos = st.sidebar.multiselect("Geo(s)", geo_list, default=geo_list)
 
     position_list = [
-        row[0]
-        for row in con.execute(
+        row[0] for row in con.execute(
             "SELECT DISTINCT \"Link Position\" FROM anchors WHERE \"Link Position\" IS NOT NULL"
         ).fetchall()
     ]
@@ -68,16 +61,14 @@ if pages_file and anchors_file:
         "Link Position(s)", position_list, default=["Content"]
     )
 
-    # If the user unselects all Funnels or all Geos, we skip running any SQL and just show empty tables.
+    # If the user has removed all Funnels OR all Geos, force pages_df & anchors_df to be empty:
     if not selected_funnels or not selected_geos:
-        pages_df = pd.DataFrame(
-            columns=["URL", "Funnel", "Topic", "Geo", "InboundLinks"]
-        )
+        pages_df = pd.DataFrame(columns=["URL", "Funnel", "Topic", "Geo", "lat", "lon"])
         anchors_df = pd.DataFrame(
             columns=["FromURL", "ToURL", "Anchor Text", "Link Position"]
         )
     else:
-        # Build the pages SQL: ALWAYS include Funnel filter (since we know selected_funnels is non-empty).
+        # Build and run pages_sql (safe because selected_funnels and selected_geos are non-empty)
         pages_sql = f"""
             SELECT
                 *,
@@ -86,10 +77,10 @@ if pages_file and anchors_file:
             WHERE Funnel IN {to_sql_str_list(selected_funnels)}
               AND Geo    IN {to_sql_str_list(selected_geos)}
         """
+        pages_df = con.execute(pages_sql).fetchdf()
 
-        # Build the anchors SQL: only if at least one position is checked.
+        # Build anchors_sql only if at least one Link‐Position is chosen
         if not selected_positions:
-            # No Link Positions → skip anchors entirely
             anchors_df = pd.DataFrame(
                 columns=["FromURL", "ToURL", "Anchor Text", "Link Position"]
             )
@@ -105,33 +96,26 @@ if pages_file and anchors_file:
             """
             anchors_df = con.execute(anchors_sql).fetchdf()
 
-        # Finally fetch pages_df last, so that pages_df is always empty if any filter is empty
-        pages_df = con.execute(pages_sql).fetchdf()
-
     # ---------------- Main UI Tabs ----------------
-    tabs = st.tabs(["🔍 Link Gap Analysis", "📊 Funnel Flow"])
+    tabs = st.tabs(["🔍 Link Gap Analysis", "📊 Funnel Flow", "🗺️ Geo Map"])
 
-    # ---------------- Tab 1: Link Gap Analysis ----------------
+    # -------------- Tab 1: Link Gap Analysis --------------
     with tabs[0]:
         if pages_df.empty:
             st.warning("No pages to display (check your Funnel/Geo selections).")
         else:
-            # Count inbound links per page
             inbound_counts = (
                 anchors_df.groupby("ToURL")["Anchor Text"]
                 .count()
                 .reset_index(name="InboundLinks")
             )
-
             gap_df = pages_df.merge(
                 inbound_counts, left_on="URL", right_on="ToURL", how="left"
             )
             gap_df["InboundLinks"] = gap_df["InboundLinks"].fillna(0).astype(int)
 
             max_links = int(gap_df["InboundLinks"].max()) if not gap_df.empty else 0
-            threshold = st.slider(
-                "Maximum Inbound Links", 0, max_links, max_links
-            )
+            threshold = st.slider("Maximum Inbound Links", 0, max_links, max_links)
 
             filtered = gap_df[
                 gap_df["InboundLinks"] <= threshold
@@ -157,25 +141,17 @@ if pages_file and anchors_file:
                     st.write(f"Inbound links pointing to `{selected_url}`:")
                     st.dataframe(link_details)
 
-    # ---------------- Tab 2: Funnel Flow Sankey ----------------
+    # -------------- Tab 2: Funnel Flow Sankey --------------
     with tabs[1]:
         if pages_df.empty or anchors_df.empty:
             st.warning("Not enough data to build a Sankey (check your filters).")
         else:
-            # Join anchors → pages (for FromURL’s funnel)
             merged = anchors_df.merge(
-                pages_df[["URL", "Funnel"]],
-                left_on="FromURL",
-                right_on="URL",
-                how="left",
+                pages_df[["URL", "Funnel"]], left_on="FromURL", right_on="URL", how="left"
             ).rename(columns={"Funnel": "From_Funnel"}).drop(columns=["URL"])
 
-            # Join anchors → pages again (for ToURL’s funnel)
             merged = merged.merge(
-                pages_df[["URL", "Funnel"]],
-                left_on="ToURL",
-                right_on="URL",
-                how="left",
+                pages_df[["URL", "Funnel"]], left_on="ToURL", right_on="URL", how="left"
             ).rename(columns={"Funnel": "To_Funnel"}).drop(columns=["URL"])
 
             sankey_df = (
@@ -184,7 +160,6 @@ if pages_file and anchors_file:
                 .reset_index(name="Count")
             )
 
-            # Only include the three known funnel stages, if present
             funnel_order = ["Top", "Mid", "Bottom"]
             label_set = sorted(
                 set(funnel_order)
@@ -192,13 +167,11 @@ if pages_file and anchors_file:
             )
             label_map = {label: i for i, label in enumerate(label_set)}
 
-            # Filter rows to only those where both From_Funnel and To_Funnel are in label_map
             sankey_df = sankey_df[
                 sankey_df["From_Funnel"].isin(label_map)
                 & sankey_df["To_Funnel"].isin(label_map)
             ]
 
-            # Build Sankey chart
             fig = go.Figure(
                 data=[
                     go.Sankey(
@@ -221,7 +194,6 @@ if pages_file and anchors_file:
                 file_name="funnel_transitions.csv",
             )
 
-            # Drill‐down table
             st.subheader("🔎 Explore Specific Funnel Transition")
             transition_options = sankey_df.apply(
                 lambda row: f"{row['From_Funnel']} → {row['To_Funnel']}", axis=1
@@ -236,15 +208,39 @@ if pages_file and anchors_file:
                     (merged["From_Funnel"] == from_funnel)
                     & (merged["To_Funnel"] == to_funnel)
                 ]
-                drill_df = transition_rows[
-                    ["FromURL", "ToURL", "Anchor Text"]
-                ]
+                drill_df = transition_rows[["FromURL", "ToURL", "Anchor Text"]]
                 st.dataframe(drill_df)
                 st.download_button(
                     "📥 Download Transition URLs",
                     drill_df.to_csv(index=False),
                     file_name="funnel_transition_details.csv",
                 )
+
+    # -------------- Tab 3: Geo Map  --------------
+    with tabs[2]:
+        # 1) Don’t attempt to draw a map if pages_df is empty:
+        if pages_df.empty:
+            st.info("No geographic data to show (check your Geo filter).")
+        else:
+            # 2) Wrap your map code in try/except, in case Geo codes are invalid or lat/lon are missing:
+            try:
+                # Example: if pages_df already has 'lat' and 'lon' columns:
+                subset = pages_df[["lat", "lon"]].dropna()
+                if subset.empty:
+                    st.warning("Selected Geo(s) contain no latitude/longitude data.")
+                else:
+                    st.map(subset)  
+                    # ─ If you’re using Plotly for a choropleth, do something like:
+                    # fig = px.choropleth(
+                    #     pages_df,
+                    #     locations="Geo",
+                    #     locationmode="country names",
+                    #     color="InboundLinks",
+                    #     hover_name="URL"
+                    # )
+                    # st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Map failed to render: {e}")
 
 else:
     st.info("👆 Please upload both files to begin.")
