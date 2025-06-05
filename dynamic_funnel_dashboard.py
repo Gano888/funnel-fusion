@@ -21,7 +21,7 @@ def get_duckdb():
 
 def load_tables(pages_df: pd.DataFrame, anchors_df: pd.DataFrame):
     """
-    Given two Pandas DataFrames (pages_df, anchors_df), 
+    Given two Pandas DataFrames (pages_df, anchors_df),
     drop old tables (if any) and create new ones in this session's DuckDB.
     """
     con = get_duckdb()
@@ -59,6 +59,10 @@ def to_sql_str_list(items):
 pages_file   = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
 anchors_file = st.sidebar.file_uploader("Upload Inlinks CSV",   type="csv")
 
+
+#
+# If both files are uploaded, read them and register in DuckDB.
+#
 if pages_file and anchors_file:
     # 1) Read each CSV into a Pandas DataFrame
     try:
@@ -76,7 +80,7 @@ if pages_file and anchors_file:
     # 2) Load (or reload) those DataFrames into this session’s DuckDB
     con = load_tables(pages_df_raw, anchors_df_raw)
 
-    # 3) Build filter picklists from DuckDB
+    # 3) Build filter picklists from DuckDB *once* (we'll reuse them in the form)
     try:
         funnel_tuples = con.execute(
             "SELECT DISTINCT Funnel FROM pages WHERE Funnel IS NOT NULL"
@@ -85,10 +89,6 @@ if pages_file and anchors_file:
     except Exception as e:
         st.error(f"❌ Error querying ‘Funnel’ from pages table: {e}")
         st.stop()
-
-    selected_funnels = st.sidebar.multiselect(
-        "Funnel Stage(s)", funnel_list, default=funnel_list
-    )
 
     try:
         geo_tuples = con.execute(
@@ -99,8 +99,6 @@ if pages_file and anchors_file:
         st.error(f"❌ Error querying ‘Geo’ from pages table: {e}")
         st.stop()
 
-    selected_geos = st.sidebar.multiselect("Geo(s)", geo_list, default=geo_list)
-
     try:
         position_tuples = con.execute(
             "SELECT DISTINCT \"Link Position\" FROM anchors WHERE \"Link Position\" IS NOT NULL"
@@ -110,13 +108,54 @@ if pages_file and anchors_file:
         st.error(f"❌ Error querying ‘Link Position’ from anchors table: {e}")
         st.stop()
 
-    # Use `position_list` as the default, instead of hard-coding ["Content"]
-    selected_positions = st.sidebar.multiselect(
-        "Link Position(s)", position_list, default=position_list
-    )
+    #
+    # 4) SIDEBAR FORM: wrap all three filters in a form so that 
+    #    the app only re-runs filtering once “Apply Filters” is clicked.
+    #
+    with st.sidebar.form(key="filter_form"):
+        selected_funnels   = st.multiselect(
+            "Funnel Stage(s)",
+            funnel_list,
+            default=st.session_state.get("selected_funnels", funnel_list),
+        )
+        selected_geos      = st.multiselect(
+            "Geo(s)",
+            geo_list,
+            default=st.session_state.get("selected_geos", geo_list),
+        )
+        selected_positions = st.multiselect(
+            "Link Position(s)",
+            position_list,
+            default=st.session_state.get("selected_positions", position_list),
+        )
 
-    # 4) If Funnels or Geos are completely deselected, force empty DataFrames
+        # A submit button: until clicked, other parts of this app won’t re-run.
+        apply = st.form_submit_button(label="Apply Filters")
+
+        # Once “Apply Filters” is clicked, stash these selections in session_state:
+        if apply:
+            st.session_state["selected_funnels"] = selected_funnels
+            st.session_state["selected_geos"] = selected_geos
+            st.session_state["selected_positions"] = selected_positions
+
+    # If the user has never clicked “Apply Filters” yet, fall back to all-selected:
+    if "selected_funnels" not in st.session_state:
+        st.session_state["selected_funnels"] = funnel_list
+    if "selected_geos" not in st.session_state:
+        st.session_state["selected_geos"] = geo_list
+    if "selected_positions" not in st.session_state:
+        st.session_state["selected_positions"] = position_list
+
+    # Use the st.session_state values for the actual filtering logic:
+    selected_funnels   = st.session_state["selected_funnels"]
+    selected_geos      = st.session_state["selected_geos"]
+    selected_positions = st.session_state["selected_positions"]
+
+    #
+    # 5) APPLY FILTERS: exactly as before, but driven by session_state
+    #
     if not selected_funnels or not selected_geos:
+        # If either Funnel or Geo is completely deselected, force empty DataFrames
         pages_df = pd.DataFrame(columns=["URL", "Funnel", "Topic", "Geo", "lat", "lon"])
         anchors_df = pd.DataFrame(
             columns=["FromURL", "ToURL", "Anchor Text", "Link Position"]
@@ -126,8 +165,6 @@ if pages_file and anchors_file:
         pages_sql = f"""
             SELECT
                 *,
-
-                -- Normalize Address → URL (lowercase & drop trailing slash)
                 LOWER(RTRIM(Address, '/')) AS URL
             FROM pages
             WHERE Funnel IN {to_sql_str_list(selected_funnels)}
@@ -148,7 +185,6 @@ if pages_file and anchors_file:
             anchors_sql = f"""
                 SELECT
                     *,
-                    -- Normalize Source → FromURL, Destination → ToURL
                     LOWER(RTRIM(Source, '/'))      AS FromURL,
                     LOWER(RTRIM(Destination, '/')) AS ToURL,
                     Anchor                         AS "Anchor Text"
@@ -161,7 +197,9 @@ if pages_file and anchors_file:
                 st.error(f"❌ Error running anchors filter SQL: {e}")
                 st.stop()
 
-    # 5) Main UI Tabs (only two now)
+    #
+    # 6) MAIN UI TABS (only two: Gap Analysis & Funnel Flow)
+    #
     tabs = st.tabs(["🔍 Link Gap Analysis", "📊 Funnel Flow"])
 
     # -------------- Tab 1: Link Gap Analysis --------------
