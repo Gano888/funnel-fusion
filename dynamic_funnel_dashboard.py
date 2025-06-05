@@ -14,7 +14,7 @@ st.title("Internal Link Analysis")
 st.markdown(
     """
     **How to use this app**:
-    1. Upload a “Classification” CSV (must contain columns: `Address`, `Funnel`, `Topic`, `Geo`, `lat`, `lon`).
+    1. Upload a “Classification” CSV (must contain columns: `Address`, `Funnel`, `Topic`, `Geo`).
     2. Upload an “Inlinks” CSV (must contain columns: `Source`, `Destination`, `Anchor`, `Link Position`).
     3. Use the sidebar filters to slice by Funnel, Geo, and Link Position.
     4. View Link Gap Analysis or Funnel Flow in the tabs below.
@@ -32,11 +32,8 @@ def normalize_url(raw_url: str) -> str:
     if pd.isna(raw_url):
         return ""
     u = raw_url.strip()
-    # Remove protocol if present
     u = re.sub(r"^https?://", "", u, flags=re.IGNORECASE)
-    # Lowercase
     u = u.lower()
-    # Trim trailing slashes
     u = u.rstrip("/")
     return u
 
@@ -50,13 +47,13 @@ def get_duckdb():
     return st.session_state.duckdb_conn
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4) CACHING DISTINCT‐VALUES QUERIES (TO PREVENT REPEATED SCANS)
+# 4) CACHING DISTINCT‐VALUES QUERIES
 # ──────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def get_distinct_values(table_name: str, column: str) -> list[str]:
     """
     Executes: SELECT DISTINCT {column} FROM {table_name} WHERE {column} IS NOT NULL
-    and returns a sorted Python list of non-null values.
+    and returns a sorted Python list of values.
     """
     con = get_duckdb()
     try:
@@ -88,7 +85,7 @@ anchors_file = st.sidebar.file_uploader("Upload Inlinks CSV",   type="csv")
 # Only proceed if both files are provided:
 if pages_file and anchors_file:
     # ──────────────────────────────────────────────────────────────────────────
-    # 6.1) READ & VALIDATE “PAGES” CSV
+    # 6.1) READ & VALIDATE “PAGES” CSV (NO LONGER REQUIRES lat/lon)
     # ──────────────────────────────────────────────────────────────────────────
     try:
         pages_df_raw = pd.read_csv(
@@ -98,8 +95,8 @@ if pages_file and anchors_file:
         st.error(f"❌ Failed to read Classification CSV: {e}")
         st.stop()
 
-    # Check required columns for pages_df_raw
-    required_pages = {"Address", "Funnel", "Topic", "Geo", "lat", "lon"}
+    # Check required columns for pages_df_raw (no lat/lon anymore)
+    required_pages = {"Address", "Funnel", "Topic", "Geo"}
     missing_pages = required_pages - set(pages_df_raw.columns)
     if missing_pages:
         st.error(
@@ -132,10 +129,9 @@ if pages_file and anchors_file:
         )
         st.stop()
 
-    # Normalize Source → FromURL, Destination → ToURL, and keep “Anchor” as-is
+    # Normalize Source → FromURL, Destination → ToURL, and rename “Anchor” → “Anchor Text”
     anchors_df_raw["FromURL"] = anchors_df_raw["Source"].apply(normalize_url)
     anchors_df_raw["ToURL"]   = anchors_df_raw["Destination"].apply(normalize_url)
-    # Rename “Anchor” → “Anchor Text” in place for clarity
     anchors_df_raw = anchors_df_raw.rename(columns={"Anchor": "Anchor Text"})
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -149,11 +145,10 @@ if pages_file and anchors_file:
         except duckdb.Error:
             pass
 
-        # Create a DuckDB table for pages
+        # Create DuckDB tables from the given DataFrames
         con.register("pages_view", pages_df)
         con.execute("CREATE TABLE pages AS SELECT * FROM pages_view;")
 
-        # Create a DuckDB table for anchors
         con.register("anchors_view", anchors_df)
         con.execute("CREATE TABLE anchors AS SELECT * FROM anchors_view;")
 
@@ -177,7 +172,7 @@ if pages_file and anchors_file:
     # ──────────────────────────────────────────────────────────────────────────
     if not selected_funnels or not selected_geos:
         # If either Funnel or Geo is completely deselected, force empty DataFrames
-        pages_df  = pd.DataFrame(columns=pages_df_raw.columns.tolist() + ["URL"])
+        pages_df   = pd.DataFrame(columns=pages_df_raw.columns.tolist() + ["URL"])
         anchors_df = pd.DataFrame(columns=anchors_df_raw.columns.tolist() + ["FromURL", "ToURL"])
     else:
         # 8.1) FILTER pages_df: only keep rows with Funnel ∈ selected_funnels AND Geo ∈ selected_geos
