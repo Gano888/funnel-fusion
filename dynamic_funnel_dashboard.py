@@ -53,7 +53,7 @@ def get_duckdb():
 def get_distinct_values(table_name: str, column: str) -> list[str]:
     """
     Executes: SELECT DISTINCT {column} FROM {table_name} WHERE {column} IS NOT NULL
-    and returns a sorted Python list of values.
+    and returns a sorted Python list of non-null values.
     """
     con = get_duckdb()
     try:
@@ -82,7 +82,6 @@ def to_sql_str_list(items: list[str]) -> str:
 pages_file   = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
 anchors_file = st.sidebar.file_uploader("Upload Inlinks CSV",   type="csv")
 
-# Only proceed if both files are provided:
 if pages_file and anchors_file:
     # ──────────────────────────────────────────────────────────────────────────
     # 6.1) READ & VALIDATE “PAGES” CSV (NO LONGER REQUIRES lat/lon)
@@ -95,7 +94,7 @@ if pages_file and anchors_file:
         st.error(f"❌ Failed to read Classification CSV: {e}")
         st.stop()
 
-    # Check required columns for pages_df_raw (no lat/lon anymore)
+    # Check required columns for pages_df_raw (no lat/lon needed anymore)
     required_pages = {"Address", "Funnel", "Topic", "Geo"}
     missing_pages = required_pages - set(pages_df_raw.columns)
     if missing_pages:
@@ -145,7 +144,6 @@ if pages_file and anchors_file:
         except duckdb.Error:
             pass
 
-        # Create DuckDB tables from the given DataFrames
         con.register("pages_view", pages_df)
         con.execute("CREATE TABLE pages AS SELECT * FROM pages_view;")
 
@@ -271,102 +269,114 @@ if pages_file and anchors_file:
     # Tab 2: 📊 Funnel Flow Sankey
     # ──────────────────────────────────────────────────────────────────────────
     with tabs[1]:
+        # If pages_df or anchors_df is empty, or if there are no funnel transitions, show a warning
         if pages_df.empty or anchors_df.empty:
             st.warning("Not enough data to build a Sankey (check your filters).")
         else:
-            with st.spinner("Building Funnel Sankey..."):
-                # 2.1) Merge anchors → pages to get From_Funnel
-                try:
-                    merged = anchors_df.merge(
-                        pages_df[["URL", "Funnel"]],
-                        left_on="FromURL",
-                        right_on="URL",
-                        how="left",
-                    ).rename(columns={"Funnel": "From_Funnel"}).drop(columns=["URL"])
-                except Exception as e:
-                    st.error(f"❌ Error merging anchors→pages for From_Funnel: {e}")
-                    st.stop()
+            # Merge anchors → pages to get From_Funnel
+            try:
+                merged = anchors_df.merge(
+                    pages_df[["URL", "Funnel"]],
+                    left_on="FromURL",
+                    right_on="URL",
+                    how="left",
+                ).rename(columns={"Funnel": "From_Funnel"}).drop(columns=["URL"])
+            except Exception as e:
+                st.error(f"❌ Error merging anchors→pages for From_Funnel: {e}")
+                st.stop()
 
-                # 2.2) Merge that result → pages again for To_Funnel
-                try:
-                    merged = merged.merge(
-                        pages_df[["URL", "Funnel"]],
-                        left_on="ToURL",
-                        right_on="URL",
-                        how="left",
-                    ).rename(columns={"Funnel": "To_Funnel"}).drop(columns=["URL"])
-                except Exception as e:
-                    st.error(f"❌ Error merging anchors→pages for To_Funnel: {e}")
-                    st.stop()
+            # Merge that result → pages again for To_Funnel
+            try:
+                merged = merged.merge(
+                    pages_df[["URL", "Funnel"]],
+                    left_on="ToURL",
+                    right_on="URL",
+                    how="left",
+                ).rename(columns={"Funnel": "To_Funnel"}).drop(columns=["URL"])
+            except Exception as e:
+                st.error(f"❌ Error merging anchors→pages for To_Funnel: {e}")
+                st.stop()
 
-                # 2.3) Group by Funnel transitions
-                sankey_df = (
-                    merged.groupby(["From_Funnel", "To_Funnel"])
-                    .size()
-                    .reset_index(name="Count")
-                )
+            # Group by Funnel transitions
+            sankey_df = (
+                merged.groupby(["From_Funnel", "To_Funnel"])
+                .size()
+                .reset_index(name="Count")
+            )
 
-                # 2.4) Determine which funnel labels actually exist, in the “Top/Mid/Bottom” order
+            # If there are no transitions at all, warn and skip plotting
+            if sankey_df.empty:
+                st.warning("No funnel‐to‐funnel links available for the current filters.")
+            else:
+                # Determine which funnel labels actually exist, in the “Top/Mid/Bottom” order
                 funnel_order = ["Top", "Mid", "Bottom"]
                 existing_labels = sorted(
-                    set(funnel_order) & set(sankey_df["From_Funnel"]).union(sankey_df["To_Funnel"])
+                    set(funnel_order)
+                    & set(sankey_df["From_Funnel"]).union(sankey_df["To_Funnel"])
                 )
-                label_map = {label: i for i, label in enumerate(existing_labels)}
 
-                # Filter sankey_df down to only the recognized labels
-                sankey_df = sankey_df[
-                    sankey_df["From_Funnel"].isin(label_map)
-                    & sankey_df["To_Funnel"].isin(label_map)
-                ]
+                # If even after intersection there are no valid labels, warn and skip
+                if not existing_labels:
+                    st.warning("Filtered funnel labels do not match any known stages (Top/Mid/Bottom).")
+                else:
+                    label_map = {label: i for i, label in enumerate(existing_labels)}
+                    sankey_df = sankey_df[
+                        sankey_df["From_Funnel"].isin(label_map)
+                        & sankey_df["To_Funnel"].isin(label_map)
+                    ]
 
-                # 2.5) Plot with Plotly
-                fig = go.Figure(
-                    data=[
-                        go.Sankey(
-                            node=dict(
-                                label=existing_labels,
-                                pad=20,
-                                thickness=20,
-                            ),
-                            link=dict(
-                                source=sankey_df["From_Funnel"].map(label_map),
-                                target=sankey_df["To_Funnel"].map(label_map),
-                                value=sankey_df["Count"],
-                            ),
+                    # If sankey_df is empty now, show a warning
+                    if sankey_df.empty:
+                        st.warning("No valid funnel transitions remain after filtering stages.")
+                    else:
+                        # Build and display the Sankey
+                        with st.spinner("Building Funnel Sankey..."):
+                            fig = go.Figure(
+                                data=[
+                                    go.Sankey(
+                                        node=dict(
+                                            label=existing_labels,
+                                            pad=20,
+                                            thickness=20,
+                                        ),
+                                        link=dict(
+                                            source=sankey_df["From_Funnel"].map(label_map),
+                                            target=sankey_df["To_Funnel"].map(label_map),
+                                            value=sankey_df["Count"],
+                                        ),
+                                    )
+                                ]
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+
+                        st.subheader("🔢 Funnel Link Transitions Table")
+                        st.dataframe(sankey_df)
+                        st.download_button(
+                            "📥 Download Sankey Table",
+                            sankey_df.to_csv(index=False),
+                            file_name="funnel_transitions.csv",
                         )
-                    ]
-                )
-                st.plotly_chart(fig, use_container_width=True)
 
-                st.subheader("🔢 Funnel Link Transitions Table")
-                st.dataframe(sankey_df)
-                st.download_button(
-                    "📥 Download Sankey Table",
-                    sankey_df.to_csv(index=False),
-                    file_name="funnel_transitions.csv",
-                )
+                        st.subheader("🔎 Explore Specific Funnel Transition")
+                        transition_options = sankey_df.apply(
+                            lambda row: f"{row['From_Funnel']} → {row['To_Funnel']}", axis=1
+                        ).tolist()
+                        selected_transition = st.selectbox(
+                            "Select a transition", options=transition_options
+                        )
 
-                st.subheader("🔎 Explore Specific Funnel Transition")
-                transition_options = sankey_df.apply(
-                    lambda row: f"{row['From_Funnel']} → {row['To_Funnel']}", axis=1
-                ).tolist()
-                selected_transition = st.selectbox(
-                    "Select a transition", options=transition_options
-                )
-
-                if selected_transition:
-                    from_funnel, to_funnel = selected_transition.split(" → ")
-                    transition_rows = merged[
-                        (merged["From_Funnel"] == from_funnel)
-                        & (merged["To_Funnel"] == to_funnel)
-                    ]
-                    drill_df = transition_rows[["FromURL", "ToURL", "Anchor Text"]]
-                    st.dataframe(drill_df)
-                    st.download_button(
-                        "📥 Download Transition URLs",
-                        drill_df.to_csv(index=False),
-                        file_name="funnel_transition_details.csv",
-                    )
-
+                        if selected_transition:
+                            from_funnel, to_funnel = selected_transition.split(" → ")
+                            transition_rows = merged[
+                                (merged["From_Funnel"] == from_funnel)
+                                & (merged["To_Funnel"] == to_funnel)
+                            ]
+                            drill_df = transition_rows[["FromURL", "ToURL", "Anchor Text"]]
+                            st.dataframe(drill_df)
+                            st.download_button(
+                                "📥 Download Transition URLs",
+                                drill_df.to_csv(index=False),
+                                file_name="funnel_transition_details.csv",
+                            )
 else:
     st.info("👆 Please upload both files to begin.")
