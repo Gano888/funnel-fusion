@@ -265,13 +265,23 @@ if pages_file and anchors_file:
                 .reset_index(name="Count")
             )
 
-            funnel_order = ["Top", "Mid", "Bottom"]
-            label_set = sorted(
-                set(funnel_order)
-                & set(sankey_df["From_Funnel"]).union(sankey_df["To_Funnel"])
+            # Instead of funnel_order = [...]
+            # 1) Figure out which funnels actually appear:
+            all_labels = list(
+                set(sankey_df["From_Funnel"].dropna())
+                | set(sankey_df["To_Funnel"].dropna())
             )
+
+            # 2) Order them by the original funnel_list (or alphabetically as fallback)
+            #    `funnel_list` comes from your SELECT DISTINCT earlier
+            label_set = [f for f in funnel_list if f in all_labels]
+            if not label_set:
+                label_set = sorted(all_labels)
+
+            # 3) Build your label_map
             label_map = {label: i for i, label in enumerate(label_set)}
 
+            # 4) Filter sankey_df to only those labels
             sankey_df = sankey_df[
                 sankey_df["From_Funnel"].isin(label_map)
                 & sankey_df["To_Funnel"].isin(label_map)
