@@ -84,17 +84,20 @@ if "sel_p" not in st.session_state: st.session_state.sel_p = pos
 
 sf, sg, sp = st.session_state.sel_f, st.session_state.sel_g, st.session_state.sel_p
 
-# load filtered data
-if sf and sg:
+# apply filters
+def get_filtered():
+    if not sf or not sg:
+        return pd.DataFrame(), pd.DataFrame()
     pages_sql = f"SELECT *, LOWER(RTRIM(Address,'/')) AS URL FROM pages WHERE Funnel IN {to_sql_list(sf)} AND Geo IN {to_sql_list(sg)}"
     pages_df  = conn.execute(pages_sql).fetchdf()
-else:
-    pages_df, anchors_df = pd.DataFrame(), pd.DataFrame()
-if sp and not pages_df.empty:
-    anchors_sql = f"SELECT *, LOWER(RTRIM(Source,'/')) AS FromURL, LOWER(RTRIM(Destination,'/')) AS ToURL, Anchor AS AnchorText FROM anchors WHERE \"Link Position\" IN {to_sql_list(sp)}"
-    anchors_df  = conn.execute(anchors_sql).fetchdf()
-else:
-    anchors_df = pd.DataFrame()
+    if sp:
+        anchors_sql = f"SELECT *, LOWER(RTRIM(Source,'/')) AS FromURL, LOWER(RTRIM(Destination,'/')) AS ToURL, Anchor AS AnchorText FROM anchors WHERE \"Link Position\" IN {to_sql_list(sp)}"
+        anchors_df  = conn.execute(anchors_sql).fetchdf()
+    else:
+        anchors_df = pd.DataFrame()
+    return pages_df, anchors_df
+
+pages_df, anchors_df = get_filtered()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) Page Explorer UI
@@ -151,15 +154,37 @@ st.subheader("External Backlinks (Ahrefs)")
 if not ahrefs_token:
     st.info("Enter Ahrefs token to fetch backlinks.")
 else:
-    params={"token":ahrefs_token,"target":page,"from":"backlinks","limit":100,"output":"json","mode":"exact"}
+    # first try page-specific
+    page_params = {"token":ahrefs_token,"target":page,"from":"backlinks","limit":100,"output":"json","mode":"exact"}
     try:
-        r=requests.get("https://apiv3.ahrefs.com",params=params,timeout=10)
+        r = requests.get("https://apiv3.ahrefs.com", params=page_params, timeout=10)
         r.raise_for_status()
-        bl = r.json().get("backlinks",[])
-        if not bl:
-            st.write("No external backlinks.")
-        else:
+        bl = r.json().get("backlinks", [])
+        if bl:
             df = pd.DataFrame(bl)
             st.dataframe(df[["referring_domain","anchor","backlinks"]], use_container_width=True)
+        else:
+            st.write("No external backlinks found for this page.")
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            # fallback to domain-level backlinks
+            domain = urlparse(page).netloc
+            dom_params = {"token":ahrefs_token,"target":domain,"from":"backlinks","limit":100,"output":"json","mode":"domain"}
+            try:
+                rd = requests.get("https://apiv3.ahrefs.com", params=dom_params, timeout=10)
+                rd.raise_for_status()
+                dbl = rd.json().get("backlinks", [])
+                if dbl:
+                    st.info(f"No page-level data; showing domain-level backlinks for {domain}.")
+                    df2 = pd.DataFrame(dbl)
+                    st.dataframe(df2[["referring_domain","anchor","backlinks"]], use_container_width=True)
+                else:
+                    st.write("No external backlinks found at page or domain level.")
+            except Exception:
+                st.write("No external backlinks found (page not in Ahrefs index).")
+        else:
+            st.error(f"Ahrefs HTTP error: {e.response.status_code} – {e.response.text}")
+    except ValueError as e:
+        st.error(f"Ahrefs JSON error: {e}")
     except Exception as e:
         st.error(f"Ahrefs error: {e}")
