@@ -1,0 +1,12 @@
+streamlit
+pandas
+duckdb
+networkx
+plotly
+wordcloud
+matplotlib
+nltk
+openpyxl
+google-auth>=2.20.0
+google-api-python-client>=2.90.0
+requests>=2.31.0
