@@ -191,19 +191,12 @@ st.subheader("External Backlinks (Ahrefs)")
 if not ahrefs_token:
     st.info("Enter your Ahrefs API token to fetch backlinks.")
 else:
-    url = "https://api.ahrefs.com/v3/site-explorer/all-backlinks"
+    # Fetch from v3 endpoint that returned data in curl test
+    url = "https://apiv3.ahrefs.com/api/v3/site-explorer/backlinks"
     headers = {"Authorization": f"Bearer {ahrefs_token}"}
-    # Only fetch key columns: referring page, domain, anchor text, and domain rating
     params = {
         "target": page,
-        "select": ",".join([
-            "url_from",          # referring page URL
-            "referring_domain",  # domain of the referrer
-            "anchor",            # anchor text
-            "domain_rating_source"  # referring domain rating
-        ]),
         "limit": 100,
-        "mode": "exact",          # exact URL match
         "output": "json"
     }
     try:
@@ -211,23 +204,20 @@ else:
         resp.raise_for_status()
         data = resp.json().get("backlinks", []) or []
         if not data:
-            st.warning("No external backlinks found for this exact URL.")
+            st.warning("No external backlinks found for this page.")
         else:
             ext_df = pd.DataFrame(data)
-            # Rename for display clarity
+            # Only show the fields that are returned: url_from, url_to, anchor
             ext_df = ext_df.rename(columns={
                 "url_from": "Referring Page",
-                "referring_domain": "Referring Domain",
-                "anchor": "Anchor Text",
-                "domain_rating_source": "Domain Rating"
+                "url_to":   "Target Page",
+                "anchor":   "Anchor Text"
             })
             st.dataframe(
-                ext_df[["Referring Page","Referring Domain","Anchor Text","Domain Rating"]],
+                ext_df[["Referring Page","Target Page","Anchor Text"]],
                 use_container_width=True
             )
     except requests.exceptions.HTTPError as e:
         st.error(f"Ahrefs HTTP error: {e.response.status_code} – {e.response.text}")
-    except ValueError as e:
-        st.error(f"Ahrefs JSON error: {e}")
     except Exception as e:
         st.error(f"Ahrefs error: {e}")
