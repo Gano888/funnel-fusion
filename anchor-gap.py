@@ -191,59 +191,65 @@ st.subheader("External Backlinks (Ahrefs)")
 if not ahrefs_token:
     st.info("Enter Ahrefs token to fetch backlinks.")
 else:
+    # Use Ahrefs API v2 endpoint for backlinks and metrics
+    base_url = "https://apiv2.ahrefs.com"
+    # 1) Fetch backlinks for the exact page
+    params = {
+        "token":  ahrefs_token,
+        "target": page,
+        "from":   "backlinks",
+        "limit":  100,
+        "output": "json",
+        "mode":   "exact"
+    }
     try:
-        # Try exact page-level backlinks
-        params = {
-            "token":  ahrefs_token,
-            "target": page,
-            "from":   "backlinks",
-            "limit":  100,
-            "output": "json",
-            "mode":   "exact"
-        }
-        resp = requests.get("https://apiv3.ahrefs.com", params=params, timeout=10)
+        resp = requests.get(base_url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json().get("backlinks", [])
+        # If no page-level results, try prefix mode
         if not data:
-            # Fallback to domain-level
-            domain = urlparse(page).netloc
-            st.info(f"No page-level data; showing domain-level backlinks for {domain}.")
-            params.update({"target": domain, "mode": "domain"})
-            resp = requests.get("https://apiv3.ahrefs.com", params=params, timeout=10)
+            st.info(f"No exact-match backlinks for {page}; trying prefix mode...")
+            params["mode"] = "prefix"
+            resp = requests.get(base_url, params=params, timeout=10)
             resp.raise_for_status()
             data = resp.json().get("backlinks", [])
         if not data:
-            st.write("No external backlinks found at page or domain level.")
+            st.write("No external backlinks found for this page.")
         else:
             ext_df = pd.DataFrame(data)
-            # Fetch Domain Rating per referring domain
+            # Collect DR per referring domain via metrics endpoint
             domains = ext_df["referring_domain"].unique()
             dr_map = {}
             for d in domains:
                 try:
-                    dr_resp = requests.get(
-                        "https://apiv3.ahrefs.com",
+                    m_resp = requests.get(
+                        base_url,
                         params={
                             "token":  ahrefs_token,
                             "target": d,
-                            "from":   "domain_rating",
+                            "from":   "metrics",
+                            "mode":   "domain",
                             "output": "json"
                         }, timeout=10
                     )
-                    dr_resp.raise_for_status()
-                    dr_map[d] = dr_resp.json().get("domain_rating")
+                    m_resp.raise_for_status()
+                    mr = m_resp.json().get("metrics", [{}])[0]
+                    dr_map[d] = mr.get("domain_rating")
                 except:
                     dr_map[d] = None
             ext_df["Domain Rating"] = ext_df["referring_domain"].map(dr_map)
-            # Prepare columns
-            cols = []
-            if "referring_page_url" in ext_df.columns:
-                cols.append("referring_page_url")
-            elif "referring_url" in ext_df.columns:
-                ext_df = ext_df.rename(columns={"referring_url": "referring_page_url"})
-                cols.append("referring_page_url")
-            cols += ["referring_domain", "anchor", "backlinks", "Domain Rating"]
-            st.dataframe(ext_df[cols], use_container_width=True)
+            # Determine referring page column
+            url_col = None
+            if "url_from" in ext_df.columns:
+                url_col = "url_from"
+            elif "referring_page_url" in ext_df.columns:
+                url_col = "referring_page_url"
+            # Display
+            display_cols = []
+            if url_col:
+                display_cols.append(url_col)
+            display_cols += ["referring_domain", "anchor", "backlinks", "Domain Rating"]
+            st.dataframe(ext_df[display_cols], use_container_width=True)
     except requests.exceptions.HTTPError as e:
         st.error(f"Ahrefs HTTP error: {e.response.status_code} – {e.response.text}")
     except ValueError as e:
