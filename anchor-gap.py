@@ -21,6 +21,7 @@ def get_duckdb():
         st.session_state.duckdb_conn = duckdb.connect(database=":memory:")
     return st.session_state.duckdb_conn
 
+
 def load_tables(pages_df: pd.DataFrame, anchors_df: pd.DataFrame):
     con = get_duckdb()
     try:
@@ -33,6 +34,7 @@ def load_tables(pages_df: pd.DataFrame, anchors_df: pd.DataFrame):
     con.register("anchors_view", anchors_df)
     con.execute("CREATE TABLE anchors AS SELECT * FROM anchors_view")
     return con
+
 
 def to_sql_str_list(items):
     escaped = ["'" + str(i).replace("'", "''") + "'" for i in items]
@@ -78,7 +80,7 @@ funnel_list   = sorted(r[0] for r in conn.execute(
 geo_list      = sorted(r[0] for r in conn.execute(
     "SELECT DISTINCT Geo FROM pages WHERE Geo IS NOT NULL"
 ).fetchall())
-position_list = sorted(r[0] for r in conn.execute(
+pos_list = sorted(r[0] for r in conn.execute(
     "SELECT DISTINCT \"Link Position\" FROM anchors WHERE \"Link Position\" IS NOT NULL"
 ).fetchall())
 
@@ -93,8 +95,8 @@ with st.sidebar.form(key="filter_form"):
         "Geo(s)", geo_list,
         default=st.session_state.get("selected_geos", geo_list))
     selected_positions = st.multiselect(
-        "Link Position(s)", position_list,
-        default=st.session_state.get("selected_positions", position_list))
+        "Link Position(s)", pos_list,
+        default=st.session_state.get("selected_positions", pos_list))
     apply = st.form_submit_button("Apply Filters")
     if apply:
         st.session_state["selected_funnels"]   = selected_funnels
@@ -105,7 +107,7 @@ with st.sidebar.form(key="filter_form"):
 for key, default in [
     ("selected_funnels",   funnel_list),
     ("selected_geos",      geo_list),
-    ("selected_positions", position_list),
+    ("selected_positions", pos_list),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -242,7 +244,7 @@ with tabs[2]:
         st.stop()
     page = st.selectbox("Select a page", pages_df["URL"].unique())
 
-    # --- GSC API pull ---
+    # --- GSC API pull with country dimension & filter ---
     if not gsc_json_file:
         st.info("Upload your GSC service-account JSON to fetch Search Console data.")
     else:
@@ -257,23 +259,22 @@ with tabs[2]:
             end = datetime.date.today()
             start = end - datetime.timedelta(days=90)
             body = {
-                "startDate": start.isoformat(),
-                "endDate":   end.isoformat(),
-                "dimensions": ["query"],
+                "startDate":  start.isoformat(),
+                "endDate":    end.isoformat(),
+                # pull both query and country
+                "dimensions": ["query", "country"],
                 "dimensionFilterGroups": [{
                     "filters": [{
-                        "dimension": "page",
-                        "operator":  "equals",
+                        "dimension":  "page",
+                        "operator":   "equals",
                         "expression": page
                     }]
                 }],
-                "rowLimit": 50
+                "rowLimit": 5000
             }
 
-            # Derive valid Search Console property from page URL
             parsed = urlparse(page)
             site_url = f"{parsed.scheme}://{parsed.netloc}"
-
             resp = gsc.searchanalytics().query(
                 siteUrl=site_url,
                 body=body
@@ -283,17 +284,25 @@ with tabs[2]:
                 st.warning("No GSC data for this page.")
             else:
                 gsc_df = pd.DataFrame(rows)
-                gsc_df.columns = ["query","impressions","clicks","ctr","position"]
+                gsc_df.columns = ["query", "country", "impressions", "clicks", "ctr", "position"]
+
+                # country picker
+                countries = sorted(gsc_df["country"].unique())
+                sel_ctry = st.multiselect("Filter queries by country", countries, default=countries)
+                filt = gsc_df[gsc_df["country"].isin(sel_ctry)]
+
                 st.subheader("Top Queries")
                 st.dataframe(
-                    gsc_df.sort_values("impressions", ascending=False).head(10),
+                    filt.sort_values("impressions", ascending=False).head(10),
                     use_container_width=True
                 )
-                c1,c2,c3,c4 = st.columns(4)
-                c1.metric("Impressions", int(gsc_df["impressions"].sum()))
-                c2.metric("Clicks",      int(gsc_df["clicks"].sum()))
-                c3.metric("CTR",         f"{gsc_df['ctr'].mean():.1%}")
-                c4.metric("Avg Position",f"{gsc_df['position'].mean():.1f}")
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Impressions", int(filt["impressions"].sum()))
+                c2.metric("Clicks",      int(filt["clicks"].sum()))
+                c3.metric("CTR",         f"{filt['ctr'].mean():.1%}")
+                c4.metric("Avg Position",f"{filt['position'].mean():.1f}")
+
         except Exception as e:
             st.error(f"GSC API error: {e}")
 
@@ -305,24 +314,32 @@ with tabs[2]:
     else:
         st.dataframe(intern[["FromURL","Anchor Text","Link Position"]], use_container_width=True)
 
-    # --- Ahrefs API pull ---
+    # --- Ahrefs API pull with improved error handling ---
     st.subheader("External Backlinks (Ahrefs)")
     if not ahrefs_token:
         st.info("Enter your Ahrefs API token to fetch external backlinks.")
     else:
         ah_url = (
-            f"https://apiv3.ahrefs.com?token={ahrefs_token}"
-            f"&target={page}&from=backlinks&limit=100&output=json"
+            f"https://apiv3.ahrefs.com?"
+            f"token={ahrefs_token}&target={page}"           
+            f"&from=backlinks&limit=100&output=json"
         )
         try:
-            data = requests.get(ah_url, timeout=10).json().get("backlinks", [])
-            ext = pd.DataFrame(data)
-            if ext.empty:
+            resp = requests.get(ah_url, timeout=10)
+            resp.raise_for_status()
+            payload = resp.json()
+            data = payload.get("backlinks", [])
+            if not data:
                 st.write("No external backlinks found.")
             else:
+                ext = pd.DataFrame(data)
                 st.dataframe(
-                    ext[["referring_domain","anchor","backlinks"]],
+                    ext[["referring_domain", "anchor", "backlinks"]],
                     use_container_width=True
                 )
+        except requests.exceptions.HTTPError as e:
+            st.error(f"Ahrefs HTTP error: {e.response.status_code} – {e.response.text}")
+        except ValueError as e:
+            st.error(f"Ahrefs API error: invalid JSON response ({e})")
         except Exception as e:
             st.error(f"Ahrefs API error: {e}")
