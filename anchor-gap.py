@@ -192,64 +192,71 @@ if not ahrefs_token:
     st.info("Enter Ahrefs token to fetch backlinks.")
 else:
     base_url = "https://apiv2.ahrefs.com"
-    # 1) Try exact match
+    # Try domain-level backlinks and then filter
+    domain = urlparse(page).netloc
     params = {
         "token":  ahrefs_token,
-        "target": page,
+        "target": domain,
         "from":   "backlinks",
-        "limit":  100,
-        "output": "json",
-        "mode":   "exact"
+        "limit":  1000,
+        "mode":   "domain",
+        "output": "json"
     }
     try:
         resp = requests.get(base_url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json().get("backlinks", []) or []
-        # 2) If no exact-match, try prefix with trailing slash
         if not data:
-            prefix = page.rstrip('/') + '/'
-            st.info(f"No exact-match backlinks for {page}; trying prefix {prefix}...")
-            params.update({"target": prefix, "mode": "prefix"})
-            resp = requests.get(base_url, params=params, timeout=10)
-            resp.raise_for_status()
-            data = resp.json().get("backlinks", []) or []
-        if not data:
-            st.write("No external backlinks found at page or prefix level.")
+            st.write("No external backlinks found for domain.")
         else:
             ext_df = pd.DataFrame(data)
-            # Fetch Domain Rating for each referring domain
-            domains = ext_df["referring_domain"].unique()
-            dr_map = {}
-            for d in domains:
-                try:
-                    m_resp = requests.get(
-                        base_url,
-                        params={
-                            "token":  ahrefs_token,
-                            "target": d,
-                            "from":   "metrics",
-                            "mode":   "domain",
-                            "output": "json"
-                        }, timeout=10
-                    )
-                    m_resp.raise_for_status()
-                    mr = m_resp.json().get("metrics", [{}])[0]
-                    dr_map[d] = mr.get("domain_rating")
-                except:
-                    dr_map[d] = None
-            ext_df["Domain Rating"] = ext_df["referring_domain"].map(dr_map)
-            # Determine referring page column
-            url_col = None
-            if "url_from" in ext_df.columns:
-                url_col = "url_from"
-            elif "referring_page_url" in ext_df.columns:
-                url_col = "referring_page_url"
-            # Display table
-            cols = []
-            if url_col:
-                cols.append(url_col)
-            cols += ["referring_domain", "anchor", "backlinks", "Domain Rating"]
-            st.dataframe(ext_df[cols], use_container_width=True)
+            # Filter for this specific page
+            # column for target URL may be "url_to" or "target_url"
+            to_col = None
+            for col in ["url_to", "target_url", "to_url", "to"]:
+                if col in ext_df.columns:
+                    to_col = col
+                    break
+            if to_col:
+                ext_df["_match"] = ext_df[to_col].str.lower().str.rstrip('/')
+                page_key = page.lower().rstrip('/')
+                ext_df = ext_df[ext_df["_match"] == page_key]
+            # If still empty, report none
+            if ext_df.empty:
+                st.write("No external backlinks found for this page within domain-level data.")
+            else:
+                # Fetch Domain Rating for each referring domain
+                domains = ext_df["referring_domain"].unique()
+                dr_map = {}
+                for d in domains:
+                    try:
+                        m_resp = requests.get(
+                            base_url,
+                            params={
+                                "token":  ahrefs_token,
+                                "target": d,
+                                "from":   "metrics",
+                                "mode":   "domain",
+                                "output": "json"
+                            }, timeout=10
+                        )
+                        m_resp.raise_for_status()
+                        mr = m_resp.json().get("metrics", [{}])[0]
+                        dr_map[d] = mr.get("domain_rating")
+                    except:
+                        dr_map[d] = None
+                ext_df["Domain Rating"] = ext_df["referring_domain"].map(dr_map)
+                # Identify referring page column
+                ref_col = None
+                for col in ["url_from", "referring_page_url", "from_url"]:
+                    if col in ext_df.columns:
+                        ref_col = col
+                        break
+                display_cols = []
+                if ref_col:
+                    display_cols.append(ref_col)
+                display_cols += ["referring_domain", "anchor", "backlinks", "Domain Rating"]
+                st.dataframe(ext_df[display_cols], use_container_width=True)
     except requests.exceptions.HTTPError as e:
         st.error(f"Ahrefs HTTP error: {e.response.status_code} – {e.response.text}")
     except ValueError as e:
