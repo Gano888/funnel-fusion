@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import requests
 import datetime
 import json
+from urllib.parse import urlparse
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -268,8 +269,14 @@ with tabs[2]:
                 }],
                 "rowLimit": 50
             }
+
+            # Derive valid Search Console property from page URL
+            parsed = urlparse(page)
+            site_url = f"{parsed.scheme}://{parsed.netloc}"
+
             resp = gsc.searchanalytics().query(
-                siteUrl=f"https://{sg[0]}", body=body
+                siteUrl=site_url,
+                body=body
             ).execute()
             rows = resp.get("rows", [])
             if not rows:
