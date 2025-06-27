@@ -191,12 +191,14 @@ st.subheader("External Backlinks (Ahrefs)")
 if not ahrefs_token:
     st.info("Enter your Ahrefs API token to fetch backlinks.")
 else:
-    # Fetch from v3 endpoint that returned data in curl test
-    url = "https://apiv3.ahrefs.com/api/v3/site-explorer/backlinks"
+    # Use the correct v3 endpoint and include mode & select params
+    url = "https://api.ahrefs.com/v3/site-explorer/all-backlinks"
     headers = {"Authorization": f"Bearer {ahrefs_token}"}
     params = {
         "target": page,
-        "limit": 100,
+        "mode":   "exact",
+        "limit":  100,
+        "select": "url_from,url_to,anchor",
         "output": "json"
     }
     try:
@@ -207,14 +209,13 @@ else:
             st.warning("No external backlinks found for this page.")
         else:
             ext_df = pd.DataFrame(data)
-            # Only show the fields that are returned: url_from, url_to, anchor
             ext_df = ext_df.rename(columns={
                 "url_from": "Referring Page",
                 "url_to":   "Target Page",
                 "anchor":   "Anchor Text"
             })
             st.dataframe(
-                ext_df[["Referring Page","Target Page","Anchor Text"]],
+                ext_df[["Referring Page", "Target Page", "Anchor Text"]],
                 use_container_width=True
             )
     except requests.exceptions.HTTPError as e:
