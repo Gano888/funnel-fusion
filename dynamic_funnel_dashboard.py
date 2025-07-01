@@ -71,6 +71,14 @@ if pages_file and anchors_file:
         st.error(f"❌ Failed to read pages CSV: {e}")
         st.stop()
 
+    # ——— Validate pages_df_raw columns ———
+    expected_pages = {"Address", "Funnel", "Topic", "Geo", "lat", "lon"}
+    actual_pages   = set(pages_df_raw.columns)
+    missing_pages  = expected_pages - actual_pages
+    if missing_pages:
+        st.error(f"❌ pages CSV is missing column(s): {', '.join(sorted(missing_pages))}")
+        st.stop()
+
     try:
         # read the raw bytes, hand off to pandas with cp1252
         anchors_bytes = anchors_file.read()
@@ -80,6 +88,14 @@ if pages_file and anchors_file:
         )
     except Exception as e:
         st.error(f"❌ Failed to read anchors CSV: {e}")
+        st.stop()
+
+    # ——— Validate anchors_df_raw columns ———
+    expected_anchors = {"Source", "Destination", "Anchor", "Link Position"}
+    actual_anchors   = set(anchors_df_raw.columns)
+    missing_anchors  = expected_anchors - actual_anchors
+    if missing_anchors:
+        st.error(f"❌ anchors CSV is missing column(s): {', '.join(sorted(missing_anchors))}")
         st.stop()
 
     # 2) Load (or reload) those DataFrames into this session’s DuckDB
@@ -139,8 +155,8 @@ if pages_file and anchors_file:
 
         # Once “Apply Filters” is clicked, stash these selections in session_state:
         if apply:
-            st.session_state["selected_funnels"] = selected_funnels
-            st.session_state["selected_geos"] = selected_geos
+            st.session_state["selected_funnels"]   = selected_funnels
+            st.session_state["selected_geos"]      = selected_geos
             st.session_state["selected_positions"] = selected_positions
 
     # If the user has never clicked “Apply Filters” yet, fall back to all-selected:
@@ -170,6 +186,7 @@ if pages_file and anchors_file:
         pages_sql = f"""
             SELECT
                 *,
+
                 LOWER(RTRIM(Address, '/')) AS URL
             FROM pages
             WHERE Funnel IN {to_sql_str_list(selected_funnels)}
@@ -213,14 +230,21 @@ if pages_file and anchors_file:
             st.warning("No pages to display (check your Funnel/Geo selections).")
         else:
             inbound_counts = (
-                anchors_df.groupby("ToURL")["Anchor Text"]
-                .count()
-                .reset_index(name="InboundLinks")
+                anchors_df
+                  .groupby("ToURL")
+                  .size()
+                  .reset_index(name="InboundLinks")
             )
+
             gap_df = pages_df.merge(
                 inbound_counts, left_on="URL", right_on="ToURL", how="left"
             )
-            gap_df["InboundLinks"] = gap_df["InboundLinks"].fillna(0).astype(int)
+
+            # ensure the column exists before filling
+            if "InboundLinks" in gap_df.columns:
+                gap_df["InboundLinks"] = gap_df["InboundLinks"].fillna(0).astype(int)
+            else:
+                gap_df["InboundLinks"] = 0
 
             max_links = int(gap_df["InboundLinks"].max()) if not gap_df.empty else 0
             threshold = st.slider("Maximum Inbound Links", 0, max_links, max_links)
@@ -270,39 +294,31 @@ if pages_file and anchors_file:
                 .reset_index(name="Count")
             )
 
-            # Instead of funnel_order = [...]
-            # 1) Figure out which funnels actually appear:
+            # Figure out which funnels actually appear:
             all_labels = list(
                 set(sankey_df["From_Funnel"].dropna())
                 | set(sankey_df["To_Funnel"].dropna())
             )
-
-            # 2) Order them by the original funnel_list (or alphabetically as fallback)
-            #    `funnel_list` comes from your SELECT DISTINCT earlier
             label_set = [f for f in funnel_list if f in all_labels]
             if not label_set:
                 label_set = sorted(all_labels)
 
-            # 3) Build your label_map
             label_map = {label: i for i, label in enumerate(label_set)}
 
-            # 4) Filter sankey_df to only those labels
             sankey_df = sankey_df[
                 sankey_df["From_Funnel"].isin(label_map)
                 & sankey_df["To_Funnel"].isin(label_map)
             ]
 
             fig = go.Figure(
-                data=[
-                    go.Sankey(
-                        node=dict(label=label_set, pad=20, thickness=20),
-                        link=dict(
-                            source=sankey_df["From_Funnel"].map(label_map),
-                            target=sankey_df["To_Funnel"].map(label_map),
-                            value=sankey_df["Count"],
-                        ),
-                    )
-                ]
+                data=[go.Sankey(
+                    node=dict(label=label_set, pad=20, thickness=20),
+                    link=dict(
+                        source=sankey_df["From_Funnel"].map(label_map),
+                        target=sankey_df["To_Funnel"].map(label_map),
+                        value=sankey_df["Count"],
+                    ),
+                )]
             )
             st.plotly_chart(fig, use_container_width=True)
 
