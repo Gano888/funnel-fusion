@@ -72,7 +72,12 @@ if pages_file and anchors_file:
         st.stop()
 
     try:
-        anchors_df_raw = pd.read_csv(io.StringIO(anchors_file.read().decode("utf-8")))
+        # read the raw bytes, hand off to pandas with cp1252
+        anchors_bytes = anchors_file.read()
+        anchors_df_raw = pd.read_csv(
+            io.BytesIO(anchors_bytes),
+            encoding="cp1252",        # or "latin-1"
+        )
     except Exception as e:
         st.error(f"❌ Failed to read anchors CSV: {e}")
         st.stop()
