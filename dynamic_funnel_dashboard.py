@@ -56,8 +56,8 @@ def to_sql_str_list(items):
 
 
 # ---------------- Upload Interface ----------------
-pages_file   = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
-anchors_file = st.sidebar.file_uploader("Upload Inlinks CSV",   type="csv")
+pages_file = st.sidebar.file_uploader("Upload Classification CSV", type="csv")
+anchors_file = st.sidebar.file_uploader("Upload Inlinks CSV", type="csv")
 
 
 #
@@ -72,9 +72,8 @@ if pages_file and anchors_file:
         st.stop()
 
     try:
-    text = anchors_file.read().decode("utf-8", errors="replace")
-    anchors_df_raw = pd.read_csv(io.StringIO(text))
-
+        text = anchors_file.read().decode("utf-8", errors="replace")
+        anchors_df_raw = pd.read_csv(io.StringIO(text))
     except Exception as e:
         st.error(f"❌ Failed to read anchors CSV: {e}")
         st.stop()
@@ -115,12 +114,12 @@ if pages_file and anchors_file:
     #    the app only re-runs filtering once “Apply Filters” is clicked.
     #
     with st.sidebar.form(key="filter_form"):
-        selected_funnels   = st.multiselect(
+        selected_funnels = st.multiselect(
             "Funnel Stage(s)",
             funnel_list,
             default=st.session_state.get("selected_funnels", funnel_list),
         )
-        selected_geos      = st.multiselect(
+        selected_geos = st.multiselect(
             "Geo(s)",
             geo_list,
             default=st.session_state.get("selected_geos", geo_list),
@@ -149,8 +148,8 @@ if pages_file and anchors_file:
         st.session_state["selected_positions"] = position_list
 
     # Use the st.session_state values for the actual filtering logic:
-    selected_funnels   = st.session_state["selected_funnels"]
-    selected_geos      = st.session_state["selected_geos"]
+    selected_funnels = st.session_state["selected_funnels"]
+    selected_geos = st.session_state["selected_geos"]
     selected_positions = st.session_state["selected_positions"]
 
     #
@@ -158,12 +157,11 @@ if pages_file and anchors_file:
     #
     if not selected_funnels or not selected_geos:
         # If either Funnel or Geo is completely deselected, force empty DataFrames
-        pages_df = pd.DataFrame(columns=["URL", "Funnel", "Topic", "Geo", "lat", "lon"])
+        pages_df = pd.DataFrame(columns=["URL", "Funnel", "Topic", "Geo"])
         anchors_df = pd.DataFrame(
             columns=["FromURL", "ToURL", "Anchor Text", "Link Position"]
         )
     else:
-        # Build & run pages_sql safely
         pages_sql = f"""
             SELECT
                 *,
@@ -178,7 +176,6 @@ if pages_file and anchors_file:
             st.error(f"❌ Error running pages filter SQL: {e}")
             st.stop()
 
-        # Build anchors_sql only if there is at least one Link-Position
         if not selected_positions:
             anchors_df = pd.DataFrame(
                 columns=["FromURL", "ToURL", "Anchor Text", "Link Position"]
@@ -267,39 +264,31 @@ if pages_file and anchors_file:
                 .reset_index(name="Count")
             )
 
-            # Instead of funnel_order = [...]
-            # 1) Figure out which funnels actually appear:
             all_labels = list(
                 set(sankey_df["From_Funnel"].dropna())
                 | set(sankey_df["To_Funnel"].dropna())
             )
 
-            # 2) Order them by the original funnel_list (or alphabetically as fallback)
-            #    `funnel_list` comes from your SELECT DISTINCT earlier
             label_set = [f for f in funnel_list if f in all_labels]
             if not label_set:
                 label_set = sorted(all_labels)
 
-            # 3) Build your label_map
             label_map = {label: i for i, label in enumerate(label_set)}
 
-            # 4) Filter sankey_df to only those labels
             sankey_df = sankey_df[
                 sankey_df["From_Funnel"].isin(label_map)
                 & sankey_df["To_Funnel"].isin(label_map)
             ]
 
             fig = go.Figure(
-                data=[
-                    go.Sankey(
-                        node=dict(label=label_set, pad=20, thickness=20),
-                        link=dict(
-                            source=sankey_df["From_Funnel"].map(label_map),
-                            target=sankey_df["To_Funnel"].map(label_map),
-                            value=sankey_df["Count"],
-                        ),
-                    )
-                ]
+                data=[go.Sankey(
+                    node=dict(label=label_set, pad=20, thickness=20),
+                    link=dict(
+                        source=sankey_df["From_Funnel"].map(label_map),
+                        target=sankey_df["To_Funnel"].map(label_map),
+                        value=sankey_df["Count"],
+                    ),
+                )]
             )
             st.plotly_chart(fig, use_container_width=True)
 
