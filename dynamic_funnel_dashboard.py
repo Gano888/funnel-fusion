@@ -72,7 +72,7 @@ if pages_file and anchors_file:
         st.stop()
 
     # ——— Validate pages_df_raw columns ———
-    expected_pages = {"Address", "Funnel", "Topic", "Geo", "lat", "lon"}
+    expected_pages = {"Address", "Funnel", "Topic", "Geo"}
     actual_pages   = set(pages_df_raw.columns)
     missing_pages  = expected_pages - actual_pages
     if missing_pages:
