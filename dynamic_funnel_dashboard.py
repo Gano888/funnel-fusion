@@ -1,3 +1,4 @@
+import streamlit as st
 import pandas as pd
 import duckdb
 import io
@@ -48,7 +49,7 @@ def to_sql_str_list(items):
     Safely convert a non-empty Python list of strings/numbers
     into a parenthesized, single-quoted SQL list:
       ["US","CA"] -> "('US','CA')"
-    Caller must ensure items is not empty.
+    Caller must ensure `items` is not empty.
     """
     escaped = ["'" + str(i).replace("'", "''") + "'" for i in items]
     return "(" + ", ".join(escaped) + ")"
@@ -71,7 +72,9 @@ if pages_file and anchors_file:
         st.stop()
 
     try:
-        anchors_df_raw = pd.read_csv(io.StringIO(anchors_file.read().decode("utf-8")))
+    text = anchors_file.read().decode("utf-8", errors="replace")
+    anchors_df_raw = pd.read_csv(io.StringIO(text))
+
     except Exception as e:
         st.error(f"❌ Failed to read anchors CSV: {e}")
         st.stop()
@@ -240,7 +243,7 @@ if pages_file and anchors_file:
                     link_details = anchors_df[
                         anchors_df["ToURL"] == selected_url
                     ][["FromURL", "Anchor Text", "Link Position"]]
-                    st.write(f"Inbound links pointing to {selected_url}:")
+                    st.write(f"Inbound links pointing to `{selected_url}`:")
                     st.dataframe(link_details)
 
     # -------------- Tab 2: Funnel Flow Sankey --------------
@@ -272,7 +275,7 @@ if pages_file and anchors_file:
             )
 
             # 2) Order them by the original funnel_list (or alphabetically as fallback)
-            #    funnel_list comes from your SELECT DISTINCT earlier
+            #    `funnel_list` comes from your SELECT DISTINCT earlier
             label_set = [f for f in funnel_list if f in all_labels]
             if not label_set:
                 label_set = sorted(all_labels)
